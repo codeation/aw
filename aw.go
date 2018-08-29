@@ -18,11 +18,23 @@ type node struct {
 
 type config struct {
 	ttl      time.Duration
+	domain   string
 	watchURL string
 	timeout  time.Duration
-	mainIP   string
 	nodes    []node
 	cf       *cfAccount
+}
+
+func lookupDomain(domain string) (string, error) {
+	addrs, err := net.LookupHost(domain)
+	if err != nil {
+		return "", err
+	}
+	if len(addrs) < 1 {
+		// lookup without errors
+		return "", nil
+	}
+	return addrs[0], nil
 }
 
 func parseDuration(value string, defaultValue int, multiplier time.Duration) time.Duration {
@@ -40,6 +52,7 @@ func loadConfig(filename string) (*config, error) {
 	}
 	cfg := &config{
 		ttl:      parseDuration(ini.Get("", "ttl"), 60, time.Second),
+		domain:   ini.Get("", "domain"),
 		watchURL: ini.Get("", "url"),
 		timeout:  parseDuration(ini.Get("", "timeout"), 60, time.Second),
 	}
@@ -48,15 +61,45 @@ func loadConfig(filename string) (*config, error) {
 			name: name,
 			ip:   ini.Get(name, "ip"),
 		})
-
 	}
 
 	cfg.cf, err = newAccount(ini)
 	if err != nil {
 		return nil, err
 	}
-	cfg.mainIP = cfg.cf.records["@"].content
 	return cfg, nil
+}
+
+func (cfg *config) checkURL() (bool, time.Duration, string) {
+	t0 := time.Now()
+	remoteIP := ""
+	client := &http.Client{
+		Timeout: cfg.timeout,
+		Transport: &http.Transport{
+			DialTLS: func(network string, addr string) (net.Conn, error) {
+				conn, err := tls.Dial(network, addr, nil)
+				if err != nil {
+					return nil, err
+				}
+				remoteIP, _, _ = net.SplitHostPort(conn.RemoteAddr().String())
+				return conn, err
+			},
+		},
+	}
+	req, err := http.NewRequest("GET", cfg.watchURL, nil)
+	if err != nil {
+		// bad URL, log it
+		log.Println(err)
+		return false, 0, remoteIP
+	}
+	resp, err := client.Do(req)
+	if err != nil {
+		// timeout or other connection error, keep silent
+		return false, 0, remoteIP
+	}
+	defer resp.Body.Close()
+	// node is alive
+	return resp.StatusCode == http.StatusOK, time.Since(t0), remoteIP
 }
 
 func (cfg *config) checkNode(ip string) (bool, time.Duration) {
@@ -95,48 +138,49 @@ func (cfg *config) checkNode(ip string) (bool, time.Duration) {
 }
 
 func (cfg *config) watch() {
-	fail := false
-	minIP := ""
-	minTimeout := cfg.timeout
-	logMessage := ""
+	mainOk, minTimeout, mainIP := cfg.checkURL()
+	if mainIP == "" {
+		mainIP, _ = lookupDomain(cfg.domain)
+	}
 
+	logMessage := "(" + mainIP + ") "
+	if !mainOk {
+		logMessage += "FAIL"
+	} else {
+		logMessage += strconv.Itoa(int(minTimeout/time.Millisecond)) + "ms"
+	}
+
+	minIP := ""
+	minNode := ""
 	for _, n := range cfg.nodes {
+		if n.ip == mainIP {
+			logMessage = "Active " + n.name + " " + logMessage
+			continue
+		}
 		// Check all nodes
 		ok, timeout := cfg.checkNode(n.ip)
-		if !ok && n.ip == cfg.mainIP {
-			// main node is broken
-			fail = true
-		}
-		if ok && timeout < minTimeout {
+		if ok && (minIP == "" || timeout < minTimeout) {
 			// the node is stil alive
 			minIP = n.ip
+			minNode = n.name
 			minTimeout = timeout
 		}
 
 		// Log stats
-		logMessage += n.name + " (" + n.ip + ") "
-		okMessage := "standby"
-		failMessage := "timeout"
-		if n.ip == cfg.mainIP {
-			okMessage = "OK"
-			failMessage = "FAIL"
-		}
+		logMessage += ", " + n.name + " "
 		if ok {
-			logMessage += strconv.Itoa(int(timeout/time.Millisecond)) + "ms "
-			logMessage += okMessage + " "
+			logMessage += strconv.Itoa(int(timeout/time.Millisecond)) + "ms"
 		} else {
-			logMessage += failMessage + " "
+			logMessage += "timeout"
 		}
 	}
 	log.Println(logMessage)
 
-	if fail && minIP != "" {
+	if !mainOk && minIP != "" {
 		// failure of the master node, a working standby node is found
-		log.Println("Switch to " + minIP)
-		if err := cfg.cf.setRecords(minIP); err != nil {
+		log.Println("Switch " + minNode + " (" + minIP + ")")
+		if err := cfg.cf.moveRecords(mainIP, minIP); err != nil {
 			log.Println(err)
-		} else {
-			cfg.mainIP = minIP
 		}
 	}
 }
@@ -148,14 +192,8 @@ func main() {
 		return
 	}
 
-	// show the current master node
-	for _, n := range cfg.nodes {
-		if n.ip == cfg.mainIP {
-			log.Println(n.name + " (" + n.ip + ") selected")
-		}
-	}
-
 	// examination
+	cfg.watch()
 	for range time.NewTicker(cfg.ttl).C {
 		cfg.watch()
 	}

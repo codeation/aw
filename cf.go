@@ -7,14 +7,16 @@ import (
 	"io/ioutil"
 	"net/http"
 	"strings"
+	"time"
 
 	"github.com/codeation/inifile"
 )
 
 // Zone record
 type cfRecord struct {
-	id      string
-	content string
+	id       string
+	content  string
+	modified time.Time
 }
 
 // CloudFlare account
@@ -23,6 +25,7 @@ type cfAccount struct {
 	apiKey  string
 	domain  string
 	zoneID  string
+	names   []string
 	records map[string]cfRecord
 }
 
@@ -63,8 +66,9 @@ func (cf *cfAccount) loadRecords(names []string) error {
 			"/dns_records?type=A&name=" + fullname + "&match=all"
 		var record struct {
 			Result []struct {
-				ID      string
-				Content string
+				ID       string
+				Content  string
+				Modified string `json:"modified_on"`
 			}
 		}
 		if err := cf.request("GET", url, nil, &record); err != nil {
@@ -73,10 +77,16 @@ func (cf *cfAccount) loadRecords(names []string) error {
 		if len(record.Result) != 1 {
 			return errors.New("Unknown CF format")
 		}
-		cf.records[name] = cfRecord{
-			id:      record.Result[0].ID,
-			content: record.Result[0].Content,
+		modified, err := time.Parse(time.RFC3339, record.Result[0].Modified)
+		if err != nil {
+			return err
 		}
+		cf.records[name] = cfRecord{
+			id:       record.Result[0].ID,
+			content:  record.Result[0].Content,
+			modified: modified,
+		}
+
 	}
 	return nil
 }
@@ -110,14 +120,11 @@ func (cf *cfAccount) setRecords(ip string) error {
 	return nil
 }
 
-// newAccount saves account credentials and reads zone ID and zone records
-func newAccount(ini *inifile.IniFile) (*cfAccount, error) {
-	cf := &cfAccount{
-		email:  ini.Get("", "email"),
-		apiKey: ini.Get("", "apikey"),
-		domain: ini.Get("", "domain"),
+// loadZone reads zone ID
+func (cf *cfAccount) loadZone() error {
+	if cf.zoneID != "" {
+		return nil
 	}
-	names := strings.Split(ini.Get("", "names"), ",")
 
 	url := "https://api.cloudflare.com/client/v4/zones?name=" + cf.domain
 	var zone struct {
@@ -126,16 +133,41 @@ func newAccount(ini *inifile.IniFile) (*cfAccount, error) {
 		}
 	}
 	if err := cf.request("GET", url, nil, &zone); err != nil {
-		return nil, err
+		return err
 	}
 	if len(zone.Result) != 1 {
-		return nil, errors.New("Unknown CF format")
+		return errors.New("Unknown CF format")
 	}
 	cf.zoneID = zone.Result[0].ID
+	return nil
+}
 
-	if err := cf.loadRecords(names); err != nil {
-		return nil, err
+func (cf *cfAccount) moveRecords(sourceIP, targetIP string) error {
+	if err := cf.loadZone(); err != nil {
+		return err
 	}
 
-	return cf, nil
+	if err := cf.loadRecords(cf.names); err != nil {
+		return err
+	}
+
+	if sourceIP != "" && cf.records["@"].content != sourceIP {
+		return errors.New("Stated IP is " + cf.records["@"].content)
+	}
+
+	if time.Since(cf.records["@"].modified) < 10*time.Minute {
+		return errors.New("Record updated recently")
+	}
+
+	return cf.setRecords(targetIP)
+}
+
+// newAccount saves account credentials and reads zone ID and zone records
+func newAccount(ini *inifile.IniFile) (*cfAccount, error) {
+	return &cfAccount{
+		email:  ini.Get("", "email"),
+		apiKey: ini.Get("", "apikey"),
+		domain: ini.Get("", "domain"),
+		names:  strings.Split(ini.Get("", "names"), ","),
+	}, nil
 }
