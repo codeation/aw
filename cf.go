@@ -110,7 +110,7 @@ func (cf *cfAccount) setRecords(ip string) error {
 			return err
 		}
 		if record.Result.Content != ip {
-			return errors.New("Set record " + name + " to " + ip + " error, remain " + record.Result.Content)
+			return errors.New("Set record " + name + " to " + ip + " error, still " + record.Result.Content)
 		}
 		cf.records[name] = cfRecord{
 			id:      cf.records[name].id,

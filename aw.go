@@ -70,38 +70,6 @@ func loadConfig(filename string) (*config, error) {
 	return cfg, nil
 }
 
-func (cfg *config) checkURL() (bool, time.Duration, string) {
-	t0 := time.Now()
-	remoteIP := ""
-	client := &http.Client{
-		Timeout: cfg.timeout,
-		Transport: &http.Transport{
-			DialTLS: func(network string, addr string) (net.Conn, error) {
-				conn, err := tls.Dial(network, addr, nil)
-				if err != nil {
-					return nil, err
-				}
-				remoteIP, _, _ = net.SplitHostPort(conn.RemoteAddr().String())
-				return conn, err
-			},
-		},
-	}
-	req, err := http.NewRequest("GET", cfg.watchURL, nil)
-	if err != nil {
-		// bad URL, log it
-		log.Println(err)
-		return false, 0, remoteIP
-	}
-	resp, err := client.Do(req)
-	if err != nil {
-		// timeout or other connection error, keep silent
-		return false, 0, remoteIP
-	}
-	defer resp.Body.Close()
-	// node is alive
-	return resp.StatusCode == http.StatusOK, time.Since(t0), remoteIP
-}
-
 func (cfg *config) checkNode(ip string) (bool, time.Duration) {
 	t0 := time.Now()
 	client := &http.Client{
@@ -138,26 +106,29 @@ func (cfg *config) checkNode(ip string) (bool, time.Duration) {
 }
 
 func (cfg *config) watch() {
-	mainOk, minTimeout, mainIP := cfg.checkURL()
-	if mainIP == "" {
-		mainIP, _ = lookupDomain(cfg.domain)
+	mainIP, err := lookupDomain(cfg.domain)
+	if err != nil || mainIP == "" {
+		log.Println("DNS lookup failure")
+		return
 	}
+	mainOk, mainTimeout := cfg.checkNode(mainIP)
 
-	logMessage := "(" + mainIP + ") "
+	logMessage := "(" + mainIP + ")"
 	if !mainOk {
-		logMessage += "FAIL"
+		logMessage += " FAIL"
 	} else {
-		logMessage += strconv.Itoa(int(minTimeout/time.Millisecond)) + "ms"
+		logMessage += " " + strconv.Itoa(int(mainTimeout/time.Millisecond)) + "ms"
 	}
 
 	minIP := ""
 	minNode := ""
+	minTimeout := cfg.timeout
 	for _, n := range cfg.nodes {
 		if n.ip == mainIP {
 			logMessage = "Active " + n.name + " " + logMessage
 			continue
 		}
-		// Check all nodes
+		// Check node
 		ok, timeout := cfg.checkNode(n.ip)
 		if ok && (minIP == "" || timeout < minTimeout) {
 			// the node is stil alive
@@ -167,18 +138,18 @@ func (cfg *config) watch() {
 		}
 
 		// Log stats
-		logMessage += ", " + n.name + " "
+		logMessage += ", " + n.name
 		if ok {
-			logMessage += strconv.Itoa(int(timeout/time.Millisecond)) + "ms"
+			logMessage += " " + strconv.Itoa(int(timeout/time.Millisecond)) + "ms"
 		} else {
-			logMessage += "timeout"
+			logMessage += " timeout"
 		}
 	}
 	log.Println(logMessage)
 
 	if !mainOk && minIP != "" {
-		// failure of the master node, a working standby node is found
-		log.Println("Switch " + minNode + " (" + minIP + ")")
+		// Failure of the master node, a working standby node is found
+		log.Println("Switch to " + minNode + " (" + minIP + ")")
 		if err := cfg.cf.moveRecords(mainIP, minIP); err != nil {
 			log.Println(err)
 		}
