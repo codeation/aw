@@ -25,6 +25,20 @@ A       *               points to 10.0.0.11     Automatic
 The AW utility will monitor all servers.
 If the primary server does not respond, DNS records will be switched to the standby server.
 
+## Installation
+
+The AW utility can be built using the following command:
+
+```
+go get -u github.com/codeation/aw
+```
+
+The -u flag instructs get to use the network to update the named packages and their dependencies.
+By default, get uses the network to check out missing packages but does not use it to look for updates
+to existing packages.
+
+The AW executable file will be in $GOPATH/bin directory.
+
 ## aw.ini
 
 Sample configuration file:
