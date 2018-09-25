@@ -53,7 +53,7 @@ timeout=10
 ; CloudFlare account and records
 apikey=012****************a12
 domain=example.com
-email=admin@webexcerpt.com
+email=admin@example.com
 names=@,*,www
 
 ; nodes alias and ip
