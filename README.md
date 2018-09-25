@@ -46,7 +46,7 @@ Sample configuration file:
 ```
 ; Watch interval, seconds
 ttl=120
-url=https://www.webexcerpt.com/index.html
+url=https://www.example.com/index.html
 ; Timeout to get URL, seconds
 timeout=10
 
