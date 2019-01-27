@@ -6,6 +6,7 @@ import (
 	"net"
 	"net/http"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/codeation/inifile"
@@ -14,6 +15,7 @@ import (
 type node struct {
 	name string
 	ip   string
+	ipv6 string
 }
 
 type config struct {
@@ -25,16 +27,39 @@ type config struct {
 	cf       *cfAccount
 }
 
-func lookupDomain(domain string) (string, error) {
-	addrs, err := net.LookupHost(domain)
+func isAddrEqual(left, right string) bool {
+	leftIP := net.ParseIP(left)
+	rightIP := net.ParseIP(right)
+	if rightIP == nil {
+		return leftIP == nil
+	}
+	return rightIP.Equal(leftIP)
+}
+
+func lookupProtocolDomain(protocol string, domain string) (string, error) {
+	ips, err := net.LookupIP(domain)
 	if err != nil {
 		return "", err
 	}
-	if len(addrs) < 1 {
-		// lookup without errors
-		return "", nil
+	for _, ip := range ips {
+		if strings.ToLower(protocol) == "ipv6" && len(ip) == 16 {
+			return ip.String(), nil
+		} else if strings.ToLower(protocol) == "ipv4" && len(ip) == 4 {
+			return ip.String(), nil
+		} else if strings.ToLower(protocol) == "ipv4" && len(ip) == 16 && ip.To4() != nil {
+			return ip.String(), nil
+		}
 	}
-	return addrs[0], nil
+	// lookup without errors
+	return "", nil
+}
+
+func lookupDomain(domain string) (string, error) {
+	return lookupProtocolDomain("IPv4", domain)
+}
+
+func lookupDomainIPv6(domain string) (string, error) {
+	return lookupProtocolDomain("IPv6", domain)
 }
 
 func parseDuration(value string, defaultValue int, multiplier time.Duration) time.Duration {
@@ -60,6 +85,7 @@ func loadConfig(filename string) (*config, error) {
 		cfg.nodes = append(cfg.nodes, node{
 			name: name,
 			ip:   ini.Get(name, "ip"),
+			ipv6: ini.Get(name, "ipv6"),
 		})
 	}
 
@@ -106,51 +132,74 @@ func (cfg *config) checkNode(ip string) (bool, time.Duration) {
 }
 
 func (cfg *config) watch() {
-	mainIP, err := lookupDomain(cfg.domain)
-	if err != nil || mainIP == "" {
+	// actual DNS records
+	actualIP, err := lookupDomain(cfg.domain)
+	if err != nil {
 		log.Println("DNS lookup failure")
 		return
 	}
-	mainOk, mainTimeout := cfg.checkNode(mainIP)
-
-	logMessage := "(" + mainIP + ")"
-	if !mainOk {
-		logMessage += " FAIL"
-	} else {
-		logMessage += " " + strconv.Itoa(int(mainTimeout/time.Millisecond)) + "ms"
-	}
-
+	actualIPv6, _ := lookupDomainIPv6(cfg.domain) // ignore errors
+	// active node IPs
+	selectedIPv6 := ""
+	selectedNode := ""
+	// fastest node IPs
 	minIP := ""
+	minIPv6 := ""
 	minNode := ""
 	minTimeout := cfg.timeout
+	logMessage := ""
 	for _, n := range cfg.nodes {
-		if n.ip == mainIP {
-			logMessage = "Active " + n.name + " " + logMessage
-			continue
+		if logMessage != "" {
+			logMessage += ", "
 		}
 		// Check node
 		ok, timeout := cfg.checkNode(n.ip)
-		if ok && (minIP == "" || timeout < minTimeout) {
-			// the node is stil alive
+		logMessage += n.name
+		// if node is actual, note that
+		if isAddrEqual(n.ip, actualIP) {
+			logMessage += " (" + n.ip
+			if actualIPv6 != "" && isAddrEqual(actualIPv6, n.ipv6) {
+				logMessage += ", " + n.ipv6
+			}
+			logMessage += ")"
+			if ok {
+				selectedIPv6 = n.ipv6
+				selectedNode = n.name
+			}
+		}
+		// lookup fastest node
+		if ok && timeout < minTimeout {
 			minIP = n.ip
+			minIPv6 = n.ipv6
 			minNode = n.name
 			minTimeout = timeout
 		}
-
-		// Log stats
-		logMessage += ", " + n.name
+		// log node status
 		if ok {
 			logMessage += " " + strconv.Itoa(int(timeout/time.Millisecond)) + "ms"
 		} else {
-			logMessage += " timeout"
+			logMessage += " Fail"
 		}
 	}
 	log.Println(logMessage)
-
-	if !mainOk && minIP != "" {
-		// Failure of the master node, a working standby node is found
-		log.Println("Switch to " + minNode + " (" + minIP + ")")
-		if err := cfg.cf.moveRecords(mainIP, minIP); err != nil {
+	if selectedNode == "" && minIP != "" {
+		// acting node fail, select fastest node
+		log.Println("Switch IPv4 to " + minNode + " (" + minIP + ")")
+		if err := cfg.cf.moveRecords(actualIP, minIP); err != nil {
+			log.Println(err)
+		}
+	}
+	if selectedNode != "" && selectedIPv6 != actualIPv6 {
+		// correct IPv6 for acting node
+		log.Println("Switch IPv6 to " + selectedNode + " (" + selectedIPv6 + ")")
+		if err := cfg.cf.moveRecordsIPv6(actualIPv6, selectedIPv6); err != nil {
+			log.Println(err)
+		}
+	}
+	if selectedNode == "" && minIPv6 != actualIPv6 {
+		// acting node fail, select fastest node IPv6
+		log.Println("Switch IPv6 to " + minNode + " (" + minIPv6 + ")")
+		if err := cfg.cf.moveRecordsIPv6(actualIPv6, minIPv6); err != nil {
 			log.Println(err)
 		}
 	}

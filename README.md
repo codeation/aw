@@ -120,3 +120,43 @@ or
 ```
 cat /var/log/syslog | grep " aw\[" | tail -n 20 | cut -d ' ' -f 7-
 ```
+
+## IPv6
+
+You can specify an IPv6 address for all or some of your servers, if they are accessible via IPv6.
+All servers are monitored using the IPv4 protocol.
+Thus, the AW utility can be deployed on the server without a IPv6 protocol.
+
+Sample aw.ini file with IPv6 addresses:
+
+```
+; Watch interval, seconds
+ttl=120
+url=https://www.example.com/index.html
+; Timeout to get URL, seconds
+timeout=10
+
+; CloudFlare account and records
+apikey=012****************a12
+domain=example.com
+email=admin@example.com
+names=@,*,www
+
+; nodes alias and ip
+[nyc01]
+ip=10.0.0.11
+ipv6=2001:db8:85a3::8a2e:370:7334
+
+[nyc02]
+ip=10.0.0.12
+ipv6=2001:db8:85a3::1e7a:629:2665
+
+[sea01]
+ip=10.0.0.13
+```
+
+When the AW utility finds that it is necessary to change the IPv4 address of the domain,
+the IPv6 domain address will also be changed synchronously.
+If the elected server does not support the IPv6 protocol, the AAAA-records will be deleted.
+Conversely, if there were no AAAA-records, and the elected server supports the IPv6 protocol,
+AAAA-records will be made.
