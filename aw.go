@@ -27,6 +27,7 @@ type config struct {
 	cf       *cfAccount
 }
 
+// isAddrEqual compares two IP addresses
 func isAddrEqual(left, right string) bool {
 	leftIP := net.ParseIP(left)
 	rightIP := net.ParseIP(right)
@@ -41,23 +42,29 @@ func lookupProtocolDomain(protocol string, domain string) (string, error) {
 	if err != nil {
 		return "", err
 	}
+	protocol = strings.ToLower(protocol)
 	for _, ip := range ips {
-		if strings.ToLower(protocol) == "ipv6" && len(ip) == 16 {
-			return ip.String(), nil
-		} else if strings.ToLower(protocol) == "ipv4" && len(ip) == 4 {
-			return ip.String(), nil
-		} else if strings.ToLower(protocol) == "ipv4" && len(ip) == 16 && ip.To4() != nil {
-			return ip.String(), nil
+		switch protocol {
+		case "ipv4":
+			if ip.To4() != nil {
+				return ip.String(), nil
+			}
+		case "ipv6":
+			if ip.To4() == nil {
+				return ip.String(), nil
+			}
 		}
 	}
-	// lookup without errors
+	// lookup returns an empty IP without errors
 	return "", nil
 }
 
+// lookupDomain returns the IPv4 domains address
 func lookupDomain(domain string) (string, error) {
 	return lookupProtocolDomain("IPv4", domain)
 }
 
+// lookupDomain returns the IPv6 domains address
 func lookupDomainIPv6(domain string) (string, error) {
 	return lookupProtocolDomain("IPv6", domain)
 }
@@ -152,10 +159,10 @@ func (cfg *config) watch() {
 		if logMessage != "" {
 			logMessage += ", "
 		}
-		// Check node
+		// check node
 		ok, timeout := cfg.checkNode(n.ip)
 		logMessage += n.name
-		// if node is actual, note that
+		// note when the node is actual
 		if isAddrEqual(n.ip, actualIP) {
 			logMessage += " (" + n.ip
 			if actualIPv6 != "" && isAddrEqual(actualIPv6, n.ipv6) {
@@ -167,7 +174,7 @@ func (cfg *config) watch() {
 				selectedNode = n.name
 			}
 		}
-		// lookup fastest node
+		// lookup for the fastest node
 		if ok && timeout < minTimeout {
 			minIP = n.ip
 			minIPv6 = n.ipv6
@@ -182,22 +189,22 @@ func (cfg *config) watch() {
 		}
 	}
 	log.Println(logMessage)
-	if selectedNode == "" && minIP != "" {
-		// acting node fail, select fastest node
-		log.Println("Switch IPv4 to " + minNode + " (" + minIP + ")")
-		if err := cfg.cf.moveRecords(actualIP, minIP); err != nil {
-			log.Println(err)
-		}
-	}
-	if selectedNode != "" && selectedIPv6 != actualIPv6 {
-		// correct IPv6 for acting node
+	if selectedNode != "" && !isAddrEqual(selectedIPv6, actualIPv6) {
+		// IPv6 adjustment for an acting node
 		log.Println("Switch IPv6 to " + selectedNode + " (" + selectedIPv6 + ")")
 		if err := cfg.cf.moveRecordsIPv6(actualIPv6, selectedIPv6); err != nil {
 			log.Println(err)
 		}
 	}
-	if selectedNode == "" && minIPv6 != actualIPv6 {
-		// acting node fail, select fastest node IPv6
+	if selectedNode == "" && minIP != "" {
+		// acting node failure, selection fastest node
+		log.Println("Switch IPv4 to " + minNode + " (" + minIP + ")")
+		if err := cfg.cf.moveRecords(actualIP, minIP); err != nil {
+			log.Println(err)
+		}
+	}
+	if selectedNode == "" && !isAddrEqual(minIPv6, actualIPv6) {
+		// acting node failure, selection IPv6 of the fastest node
 		log.Println("Switch IPv6 to " + minNode + " (" + minIPv6 + ")")
 		if err := cfg.cf.moveRecordsIPv6(actualIPv6, minIPv6); err != nil {
 			log.Println(err)
