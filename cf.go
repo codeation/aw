@@ -1,9 +1,9 @@
 package main
 
 import (
+	"bytes"
 	"encoding/json"
 	"errors"
-	"io"
 	"io/ioutil"
 	"net/http"
 	"strings"
@@ -30,10 +30,25 @@ type cfAccount struct {
 
 var errNotFound = errors.New("Record not found")
 
+type cfRecordRequest struct {
+	Type    string `json:"type"`
+	Name    string `json:"name"`
+	Content string `json:"content"`
+	Proxied bool   `json:"proxied"`
+}
+
 // request parses the CloudFlare response
-func (cf *cfAccount) request(method, url string, body io.Reader, v interface{}) error {
+func (cf *cfAccount) request(method, url string, body interface{}, v interface{}) error {
 	client := &http.Client{}
-	req, err := http.NewRequest(method, url, body)
+	bodyData, err := json.Marshal(body)
+	if err != nil {
+		return err
+	}
+	if body == nil {
+		bodyData = nil
+	}
+	url = "https://api.cloudflare.com/client/v4" + url
+	req, err := http.NewRequest(method, url, bytes.NewReader(bodyData))
 	if err != nil {
 		return err
 	}
@@ -63,8 +78,8 @@ func (cf *cfAccount) loadRecords(names []string, recordType string) (map[string]
 		if name == "@" {
 			fullname = cf.domain
 		}
-		url := "https://api.cloudflare.com/client/v4/zones/" + cf.zoneID +
-			"/dns_records?type=" + recordType + "&name=" + fullname + "&match=all"
+		url := "/zones/" + cf.zoneID + "/dns_records" +
+			"?type=" + recordType + "&name=" + fullname + "&match=all"
 		var record struct {
 			Result []struct {
 				ID       string
@@ -98,15 +113,19 @@ func (cf *cfAccount) setRecords(ip string, recordType string, records map[string
 		if name == "@" {
 			fullname = cf.domain
 		}
-		url := "https://api.cloudflare.com/client/v4/zones/" + cf.zoneID +
-			"/dns_records/" + r.id
-		body := `{"type":"` + recordType + `","name":"` + fullname + `","content":"` + ip + `","proxied":false}`
+		url := "/zones/" + cf.zoneID + "/dns_records/" + r.id
+		body := &cfRecordRequest{
+			Type:    recordType,
+			Name:    fullname,
+			Content: ip,
+			Proxied: false,
+		}
 		var record struct {
 			Result struct {
 				Content string
 			}
 		}
-		if err := cf.request("PUT", url, strings.NewReader(body), &record); err != nil {
+		if err := cf.request("PUT", url, body, &record); err != nil {
 			return err
 		}
 		if !isAddrEqual(record.Result.Content, ip) {
@@ -123,15 +142,19 @@ func (cf *cfAccount) createRecords(ip string, recordType string, names []string)
 		if name == "@" {
 			fullname = cf.domain
 		}
-		url := "https://api.cloudflare.com/client/v4/zones/" + cf.zoneID +
-			"/dns_records"
-		body := `{"type":"` + recordType + `","name":"` + fullname + `","content":"` + ip + `","proxied":false}`
+		url := "/zones/" + cf.zoneID + "/dns_records"
+		body := &cfRecordRequest{
+			Type:    recordType,
+			Name:    fullname,
+			Content: ip,
+			Proxied: false,
+		}
 		var record struct {
 			Result struct {
 				Content string
 			}
 		}
-		if err := cf.request("POST", url, strings.NewReader(body), &record); err != nil {
+		if err := cf.request("POST", url, body, &record); err != nil {
 			return err
 		}
 		if !isAddrEqual(record.Result.Content, ip) {
@@ -144,11 +167,9 @@ func (cf *cfAccount) createRecords(ip string, recordType string, names []string)
 // deleteRecords deletes zone records
 func (cf *cfAccount) deleteRecords(recordType string, records map[string]cfRecord) error {
 	for _, r := range records {
-		url := "https://api.cloudflare.com/client/v4/zones/" + cf.zoneID +
-			"/dns_records/" + r.id
-		body := ""
+		url := "/zones/" + cf.zoneID + "/dns_records/" + r.id
 		var record struct{}
-		if err := cf.request("DELETE", url, strings.NewReader(body), &record); err != nil {
+		if err := cf.request("DELETE", url, nil, &record); err != nil {
 			return err
 		}
 	}
@@ -160,8 +181,7 @@ func (cf *cfAccount) loadZone() error {
 	if cf.zoneID != "" {
 		return nil
 	}
-
-	url := "https://api.cloudflare.com/client/v4/zones?name=" + cf.domain
+	url := "/zones?name=" + cf.domain
 	var zone struct {
 		Result []struct {
 			ID string
@@ -181,20 +201,16 @@ func (cf *cfAccount) moveRecords(sourceIP, targetIP string) error {
 	if err := cf.loadZone(); err != nil {
 		return err
 	}
-
 	records, err := cf.loadRecords(cf.names, "A")
 	if err != nil {
 		return err
 	}
-
 	if sourceIP != "" && !isAddrEqual(records["@"].content, sourceIP) {
 		return errors.New("Stated IP is " + records["@"].content)
 	}
-
 	if time.Since(records["@"].modified) < 10*time.Minute {
 		return errors.New("Record updated recently")
 	}
-
 	return cf.setRecords(targetIP, "A", records)
 }
 
@@ -202,12 +218,10 @@ func (cf *cfAccount) moveRecordsIPv6(sourceIPv6, targetIPv6 string) error {
 	if err := cf.loadZone(); err != nil {
 		return err
 	}
-
 	records, err := cf.loadRecords(cf.names, "AAAA")
 	if err != nil && err != errNotFound {
 		return err
 	}
-
 	if err == errNotFound {
 		// no any records detected
 		if targetIPv6 != "" {
