@@ -24,7 +24,7 @@ type config struct {
 	watchURL string
 	timeout  time.Duration
 	nodes    []node
-	cf       *cfAccount
+	cf       *cfConfig
 }
 
 // isAddrEqual compares two IP addresses
@@ -82,6 +82,9 @@ func loadConfig(filename string) (*config, error) {
 	if err != nil {
 		return nil, err
 	}
+	if strings.ToLower(ini.Get("", "command")) == "true" {
+		ini.Command(true)
+	}
 	cfg := &config{
 		ttl:      parseDuration(ini.Get("", "ttl"), 60, time.Second),
 		domain:   ini.Get("", "domain"),
@@ -95,11 +98,7 @@ func loadConfig(filename string) (*config, error) {
 			ipv6: ini.Get(name, "ipv6"),
 		})
 	}
-
-	cfg.cf, err = newAccount(ini)
-	if err != nil {
-		return nil, err
-	}
+	cfg.cf = newCFConfig(ini)
 	return cfg, nil
 }
 
@@ -218,7 +217,6 @@ func main() {
 		log.Println(err)
 		return
 	}
-
 	// examination
 	cfg.watch()
 	for range time.NewTicker(cfg.ttl).C {

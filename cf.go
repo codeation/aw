@@ -28,7 +28,12 @@ type cfAccount struct {
 	names  []string
 }
 
-var errNotFound = errors.New("Record not found")
+// CloudFlare config
+type cfConfig struct {
+	ini *inifile.IniFile
+}
+
+var errNotFound = errors.New("record not found")
 
 type cfRecordRequest struct {
 	Type    string `json:"type"`
@@ -40,15 +45,15 @@ type cfRecordRequest struct {
 // request parses the CloudFlare response
 func (cf *cfAccount) request(method, url string, body interface{}, v interface{}) error {
 	client := &http.Client{}
-	bodyData, err := json.Marshal(body)
+	reqBody, err := json.Marshal(body)
 	if err != nil {
 		return err
 	}
 	if body == nil {
-		bodyData = nil
+		reqBody = nil
 	}
 	url = "https://api.cloudflare.com/client/v4" + url
-	req, err := http.NewRequest(method, url, bytes.NewReader(bodyData))
+	req, err := http.NewRequest(method, url, bytes.NewReader(reqBody))
 	if err != nil {
 		return err
 	}
@@ -129,7 +134,7 @@ func (cf *cfAccount) setRecords(ip string, recordType string, records map[string
 			return err
 		}
 		if !isAddrEqual(record.Result.Content, ip) {
-			return errors.New("Set record " + name + " to " + ip + " error, still " + record.Result.Content)
+			return errors.New("set record " + name + " to " + ip + " error, still " + record.Result.Content)
 		}
 	}
 	return nil
@@ -158,7 +163,7 @@ func (cf *cfAccount) createRecords(ip string, recordType string, names []string)
 			return err
 		}
 		if !isAddrEqual(record.Result.Content, ip) {
-			return errors.New("Set record " + name + " to " + ip + " error, still " + record.Result.Content)
+			return errors.New("set record " + name + " to " + ip + " error, still " + record.Result.Content)
 		}
 	}
 	return nil
@@ -178,9 +183,6 @@ func (cf *cfAccount) deleteRecords(recordType string, records map[string]cfRecor
 
 // loadZone reads zone ID
 func (cf *cfAccount) loadZone() error {
-	if cf.zoneID != "" {
-		return nil
-	}
 	url := "/zones?name=" + cf.domain
 	var zone struct {
 		Result []struct {
@@ -191,13 +193,25 @@ func (cf *cfAccount) loadZone() error {
 		return err
 	}
 	if len(zone.Result) != 1 {
-		return errors.New("Unknown CF format")
+		return errors.New("unknown CF format")
 	}
 	cf.zoneID = zone.Result[0].ID
 	return nil
 }
 
-func (cf *cfAccount) moveRecords(sourceIP, targetIP string) error {
+// newAccount saves account credentials and reads zone ID and zone records
+func (c *cfConfig) newAccount() *cfAccount {
+	return &cfAccount{
+		email:  c.ini.Get("", "email"),
+		apiKey: c.ini.Get("", "apikey"),
+		domain: c.ini.Get("", "domain"),
+		names:  strings.Split(c.ini.Get("", "names"), ","),
+	}
+}
+
+// moveRecords changes specified A records from sourceIP to targetIP
+func (c *cfConfig) moveRecords(sourceIP, targetIP string) error {
+	cf := c.newAccount()
 	if err := cf.loadZone(); err != nil {
 		return err
 	}
@@ -206,15 +220,17 @@ func (cf *cfAccount) moveRecords(sourceIP, targetIP string) error {
 		return err
 	}
 	if sourceIP != "" && !isAddrEqual(records["@"].content, sourceIP) {
-		return errors.New("Stated IP is " + records["@"].content)
+		return errors.New("stated IP is " + records["@"].content)
 	}
 	if time.Since(records["@"].modified) < 10*time.Minute {
-		return errors.New("Record updated recently")
+		return errors.New("record updated recently")
 	}
 	return cf.setRecords(targetIP, "A", records)
 }
 
-func (cf *cfAccount) moveRecordsIPv6(sourceIPv6, targetIPv6 string) error {
+// moveRecordsIPv6 changes specified AAAA records from sourceIPv6 to targetIPv6
+func (c *cfConfig) moveRecordsIPv6(sourceIPv6, targetIPv6 string) error {
+	cf := c.newAccount()
 	if err := cf.loadZone(); err != nil {
 		return err
 	}
@@ -233,7 +249,7 @@ func (cf *cfAccount) moveRecordsIPv6(sourceIPv6, targetIPv6 string) error {
 		if targetIPv6 != "" {
 			// update
 			if time.Since(records["@"].modified) < 10*time.Minute {
-				return errors.New("Record updated recently")
+				return errors.New("record updated recently")
 			}
 			return cf.setRecords(targetIPv6, "AAAA", records)
 		}
@@ -243,12 +259,8 @@ func (cf *cfAccount) moveRecordsIPv6(sourceIPv6, targetIPv6 string) error {
 	return nil
 }
 
-// newAccount saves account credentials and reads zone ID and zone records
-func newAccount(ini *inifile.IniFile) (*cfAccount, error) {
-	return &cfAccount{
-		email:  ini.Get("", "email"),
-		apiKey: ini.Get("", "apikey"),
-		domain: ini.Get("", "domain"),
-		names:  strings.Split(ini.Get("", "names"), ","),
-	}, nil
+func newCFConfig(ini *inifile.IniFile) *cfConfig {
+	return &cfConfig{
+		ini: ini,
+	}
 }
