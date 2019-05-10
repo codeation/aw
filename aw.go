@@ -201,12 +201,12 @@ func (cfg *config) watch() {
 		if err := cfg.cf.moveRecords(actualIP, minIP); err != nil {
 			log.Println(err)
 		}
-	}
-	if selectedNode == "" && !isAddrEqual(minIPv6, actualIPv6) {
-		// acting node failure, selection IPv6 of the fastest node
-		log.Println("Switch IPv6 to " + minNode + " (" + minIPv6 + ")")
-		if err := cfg.cf.moveRecordsIPv6(actualIPv6, minIPv6); err != nil {
-			log.Println(err)
+		if !isAddrEqual(minIPv6, actualIPv6) {
+			// selection IPv6 of the fastest node
+			log.Println("Switch IPv6 to " + minNode + " (" + minIPv6 + ")")
+			if err := cfg.cf.moveRecordsIPv6(actualIPv6, minIPv6); err != nil {
+				log.Println(err)
+			}
 		}
 	}
 }
