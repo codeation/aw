@@ -2,6 +2,8 @@
 
 AW is utility for switching DNS-records to ensure the availability of a web server
 
+This repository has been archived. It is now read-only. 
+
 ## Usage
 
 The IP address of the primary website server is stored on the DNS service. In this case, it is cloudflare.com.
