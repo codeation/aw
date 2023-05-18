@@ -10,7 +10,7 @@ The secondary or standby servers will only come into play when the primary serve
 Lets assume, that www.example.com now point to 10.0.0.11 address.
 Standby server IPs are 10.0.0.12 and 10.0.0.13.
 
-![AW workflow scheme](https://codeation.github.io/pages/images/aw_scheme.png)
+![AW workflow scheme](https://codeation.github.io/images/aw_scheme.png)
 
 In this case, the cloudflare DNS records will be:
 
